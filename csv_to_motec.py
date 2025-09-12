@@ -5,8 +5,6 @@ import sys
 import os
 from datetime import datetime
 
-# No default CSV path - user must specify
-
 # Import MoTeC format classes from local file
 try:
     from motec_ld import MotecLog, MotecChannel, MotecEvent
@@ -79,26 +77,28 @@ ALL_CHANNELS = [
 ]
 
 
-def convert_csv_to_motec_fixed(csv_path, output_filename, max_samples=None):
-    """Convert ALL CSV columns to MoTeC with FIXED encoding"""
-    
-    print("Converting CSV to MoTeC")
-    print("=" * 60)
-    
-    # Read CSV data
+def read_csv_file(csv_path, max_samples=None):
     print(f"Reading {csv_path}...")
     data = []
     with open(csv_path, 'r') as f:
         reader = csv.reader(f)
         header = next(reader)
-        
         for i, row in enumerate(reader):
             if max_samples and i >= max_samples:
                 break
             data.append(row)
+    print(f"Read {len(data)} samples from {os.path.basename(csv_path)}")
+    return data
+
+
+def convert_csv_to_motec_fixed(csv_path, output_filename, max_samples=None):
+    """Convert ALL CSV columns to MoTeC with FIXED encoding"""
     
-    print(f"Read {len(data)} samples")
-    
+    print("Converting CSV to MoTeC")
+    print("=" * 60)
+
+    data = read_csv_file(csv_path, max_samples)
+
     # Calculate frequency
     freq = 500
     if len(data) >= 2:
@@ -134,30 +134,24 @@ def convert_csv_to_motec_fixed(csv_path, output_filename, max_samples=None):
     
     for i, (col_idx, csv_name, display_name, short_name, units) in enumerate(ALL_CHANNELS):
         try:
-            # Create channel definition with hardcoded defaults (no more channels.py dependency)
             channel_def = {
                 "name": display_name,
-                "shortname": short_name[:8],  # MoTeC limits to 8 chars
+                "shortname": short_name[:8],
                 "units": units,
-                "id": 8000 + i,  # Use IDs starting at 8000
+                "id": 8000 + i,
                 "freq": freq,
-                # Fixed defaults that work with MoTeC
                 "shift": 0,
                 "multiplier": 1,
                 "scale": 1,
                 "decplaces": 0,
-                # Fixed values for compatibility
-                "datatype": 0x07,  # float (handles all value ranges)
-                "datasize": 4      # 4 bytes for float
+                "datatype": 0x07,
+                "datasize": 4
             }
-            
             channel = MotecChannel(channel_def)
             log.add_channel(channel)
             channels_added.append((col_idx, csv_name))
-            
-            if i < 10 or i % 10 == 0:  # Show first 10 and every 10th
+            if i < 10 or i % 10 == 0:
                 print(f"  [{i+1:2}/{len(ALL_CHANNELS)}] {display_name:25} (col {col_idx:2}, {units})")
-            
         except Exception as e:
             print(f"  ERROR adding {display_name}: {e}")
     
@@ -166,29 +160,20 @@ def convert_csv_to_motec_fixed(csv_path, output_filename, max_samples=None):
     # Add samples
     print(f"\nConverting samples...")
     sample_count = 0
-    
     for row_idx, row in enumerate(data):
         samples = []
-        
         for col_idx, csv_name in channels_added:
             try:
                 val_str = row[col_idx]
-                
-                # Handle None and empty values
                 if val_str == 'None' or val_str == '':
                     val = 0.0
                 else:
-                    # NO MODIFICATION - use raw value
                     val = float(val_str)
-                
                 samples.append(val)
-                
             except (IndexError, ValueError):
                 samples.append(0.0)
-        
         log.add_samples(samples)
         sample_count += 1
-        
     
     print(f"\nConversion complete:")
     print(f"  Samples converted: {sample_count}")
@@ -196,10 +181,7 @@ def convert_csv_to_motec_fixed(csv_path, output_filename, max_samples=None):
     # Write output to csv-to-motec/output folder
     script_dir = os.path.dirname(os.path.abspath(__file__))
     output_dir = os.path.join(script_dir, 'output')
-    
-    # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
-    
     output_path = os.path.join(output_dir, output_filename)
     
     print(f"\nWriting to {output_path}...")
@@ -219,37 +201,40 @@ def convert_csv_to_motec_fixed(csv_path, output_filename, max_samples=None):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description='Convert CSV to MoTeC format')
-    
-    # Required CSV input file
-    parser.add_argument('csv_file', 
-                       help='Path to CSV file to convert')
-    
-    # Optional arguments
+    parser = argparse.ArgumentParser(description='Convert CSV(s) to MoTeC format')
+    parser.add_argument('input_path', help='Path to CSV file OR folder of CSVs to convert')
     parser.add_argument('--samples', '-s', type=int, default=None,
                        help='Max samples to convert (default: all)')
-    
     args = parser.parse_args()
     
-    # Check if CSV exists
-    if not os.path.exists(args.csv_file):
-        print(f"Error: CSV file not found: {args.csv_file}")
+    if not os.path.exists(args.input_path):
+        print(f"Error: Path not found: {args.input_path}")
         sys.exit(1)
-    
-    # Generate output filename based on input CSV
-    csv_basename = os.path.splitext(os.path.basename(args.csv_file))[0]
-    output_filename = f"{csv_basename}.ld"
-    
-    # Convert
-    output_path = convert_csv_to_motec_fixed(
-        args.csv_file,
-        output_filename, 
-        args.samples
-    )
-    
-    print("\n" + "=" * 60)
-    print("DONE! Load in MoTeC i2:")
-    print(f"  File location: {output_path}")
+
+    # Case 1: Single CSV
+    if os.path.isfile(args.input_path) and args.input_path.endswith(".csv"):
+        csv_files = [args.input_path]
+    # Case 2: Folder of CSVs
+    elif os.path.isdir(args.input_path):
+        csv_files = [
+            os.path.join(args.input_path, f) 
+            for f in os.listdir(args.input_path) if f.endswith(".csv")
+        ]
+        if not csv_files:
+            print("No CSV files found in folder.")
+            sys.exit(1)
+    else:
+        print("Error: Input must be a CSV file or a folder containing CSVs.")
+        sys.exit(1)
+
+    # Process all CSVs
+    for csv_file in csv_files:
+        csv_basename = os.path.splitext(os.path.basename(csv_file))[0]
+        output_filename = f"{csv_basename}.ld"
+        output_path = convert_csv_to_motec_fixed(csv_file, output_filename, args.samples)
+        print("\n" + "=" * 60)
+        print("DONE! Load in MoTeC i2:")
+        print(f"  File location: {output_path}")
 
 
 if __name__ == '__main__':
